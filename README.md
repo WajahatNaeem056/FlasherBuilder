@@ -6,7 +6,7 @@ Open **Documentation** in the sidebar to read this guide inside the app, with fo
 
 ## Linux and Windows releases
 
-Download the matching package from the repository's [Releases](https://github.com/koaaN/Flasher_Builder/releases):
+Download the matching package from the repository's [Releases](https://github.com/wajahatnaeem056/FlasherBuilder/releases):
 
 - **Windows 10/11 x64:** extract `FlasherBuilder-windows-x86_64.zip` and run `FlasherBuilder.exe`.
 - **Linux x86-64:** extract `FlasherBuilder-linux-x86_64.tar.gz` and run `./FlasherBuilder`.
