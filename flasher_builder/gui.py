@@ -605,7 +605,15 @@ class App(QMainWindow):
 
     def build_page(self):
         page = QWidget(); page.setObjectName('innerPanel')
-        layout = QVBoxLayout(page); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(10)
+        outer = QVBoxLayout(page); outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(10)
+        # The cards scroll only when the window is too short to show them (small or scaled
+        # screens), so the window never grows past the screen. When they fit, no scrollbar
+        # is shown and the layout is unchanged. The save/build row stays pinned below.
+        cards = QWidget(); cards.setObjectName('innerPanel'); self.setup_content = cards
+        layout = QVBoxLayout(cards); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(10)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff); scroll.setWidget(cards)
+        outer.addWidget(scroll, 1)
         top = QHBoxLayout(); top.setSpacing(16)
         configure, form = card()
         title = QHBoxLayout()
@@ -778,7 +786,7 @@ class App(QMainWindow):
         layout.addLayout(top)
         layout.addWidget(source_card)
         layout.addStretch(1)
-        layout.addLayout(actions)
+        outer.addLayout(actions)
         self.fields['device'].addItems(list(self.catalog.devices))
         self.fields['device'].currentTextChanged.connect(self.device_changed)
         self.fields['kind'].currentTextChanged.connect(self.kind_changed)
