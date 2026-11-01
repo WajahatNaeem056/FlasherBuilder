@@ -705,7 +705,7 @@ class App(QMainWindow):
         self.skip_odm = CheckBox('Skip odm.img from bloat'); self.skip_odm.setObjectName('zipOption')
         self.skip_odm.setChecked(False); self.skip_odm.setAccessibleName('Skip odm.img from bloat')
         self.skip_odm.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.skip_odm.setToolTip('Do not download or use the bloat odm.img. The OTA\'s own odm.img is used instead. Off by default.')
+        self.skip_odm.setToolTip('Do not download or use the bloat odm.img; the OTA\'s own odm.img is used instead. Works for every device, region and flasher type (no effect where there is no bloat odm.img). Off by default.')
         self.skip_odm.toggled.connect(self.refresh_bloat_status)
         self.inputs.append(self.skip_odm); nl.addWidget(self.skip_odm)
         self.bloat_download = button('Download bloat', 'download', callback=lambda: self.start('bloat'))
@@ -962,7 +962,7 @@ class App(QMainWindow):
     def values(self):
         values = {k: widget.currentText() if isinstance(widget, QComboBox) else widget.text().strip() for k, widget in self.fields.items()} | {'region': self.region}
         values['zip_output'] = self.zip_build.isChecked()
-        values['skip_odm'] = self.skip_odm.isChecked() and self.skip_odm.isEnabled()
+        values['skip_odm'] = self.skip_odm.isChecked()
         if self.ota_mode == 'catalog':
             for role in ('ota', 'base'):
                 entry = self.ota_combos[role].currentData()
@@ -1168,7 +1168,6 @@ class App(QMainWindow):
 
     def apply_bloat_status(self, data):
         self.bloat_data = data
-        self.update_skip_odm_control()
         self.update_bloat_delete()
         if 'error' in data:
             self.bloat_status.setText('Could not check local files')
@@ -1199,16 +1198,6 @@ class App(QMainWindow):
         self.bloat_download.setIcon(icon('check' if data['ready'] else 'download'))
         self.bloat_download.setEnabled(bool(data['total']) and not data['ready'] and not self.busy)
         self.update_build_gate()
-
-    def update_skip_odm_control(self):
-        # Only meaningful when this selection actually downloads a bloat odm.img.
-        has_odm = bool(self.bloat_data and self.bloat_data.get('has_odm'))
-        usable = has_odm and not self.busy and not self.bloat_deleting
-        if not has_odm and self.skip_odm.isChecked():
-            self.skip_odm.blockSignals(True); self.skip_odm.setChecked(False); self.skip_odm.blockSignals(False)
-        self.skip_odm.setEnabled(usable)
-        self.skip_odm.setToolTip("Do not download or use the bloat odm.img. The OTA's own odm.img is used instead. Off by default." if has_odm
-                                 else 'This selection has no bloat odm.img to skip.')
 
     def update_bloat_delete(self):
         enabled = False
