@@ -46,7 +46,7 @@ class WorkspaceLayoutTests(unittest.TestCase):
     def assert_setup_fits(self):
         self.app.processEvents()
         setup = self.window.pages.widget(0)
-        minimum = setup.minimumSizeHint()
+        minimum = self.window.setup_content.minimumSizeHint()
         if minimum.width() > setup.width():
             for card in (self.window.configure_card, self.window.bloat_card, self.window.ota_card):
                 print('LAYOUT CARD', card.minimumSizeHint().toTuple(), flush=True)
@@ -61,7 +61,8 @@ class WorkspaceLayoutTests(unittest.TestCase):
             f'bloat={self.window.bloat_card.minimumSizeHint().toTuple()}, '
             f'OTA={self.window.ota_card.minimumSizeHint().toTuple()}')
         self.assertLessEqual(minimum.height(), setup.height())
-        self.assertFalse(setup.findChildren(QScrollArea))
+        for area in setup.findChildren(QScrollArea):
+            self.assertFalse(area.verticalScrollBar().isVisible() or area.horizontalScrollBar().isVisible())
         for control in setup.findChildren(QWidget):
             if isinstance(control, (QLineEdit, QPushButton, CheckBox, ComboBox)) and control.isVisibleTo(setup):
                 rect = QRect(control.mapTo(setup, QPoint()), control.size())
