@@ -702,6 +702,12 @@ class App(QMainWindow):
         self.bloat_browse.setAccessibleName('Choose bloat download folder')
         folder_row.addWidget(self.bloat_browse); nl.addLayout(folder_row)
         self.inputs.extend((self.fields['bloat_dir'], self.bloat_browse))
+        self.skip_odm = CheckBox('Skip odm.img from bloat'); self.skip_odm.setObjectName('zipOption')
+        self.skip_odm.setChecked(False); self.skip_odm.setAccessibleName('Skip odm.img from bloat')
+        self.skip_odm.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.skip_odm.setToolTip('Do not download or use the bloat odm.img. The OTA\'s own odm.img is used instead. Off by default.')
+        self.skip_odm.toggled.connect(self.refresh_bloat_status)
+        self.inputs.append(self.skip_odm); nl.addWidget(self.skip_odm)
         self.bloat_download = button('Download bloat', 'download', callback=lambda: self.start('bloat'))
         self.bloat_download.setEnabled(False)
         bloat_actions = QHBoxLayout()
@@ -956,6 +962,7 @@ class App(QMainWindow):
     def values(self):
         values = {k: widget.currentText() if isinstance(widget, QComboBox) else widget.text().strip() for k, widget in self.fields.items()} | {'region': self.region}
         values['zip_output'] = self.zip_build.isChecked()
+        values['skip_odm'] = self.skip_odm.isChecked() and self.skip_odm.isEnabled()
         if self.ota_mode == 'catalog':
             for role in ('ota', 'base'):
                 entry = self.ota_combos[role].currentData()
@@ -1042,7 +1049,7 @@ class App(QMainWindow):
 
     def local_bloat_ready(self):
         values = self.values()
-        key = tuple(values[k] for k in ('device', 'kind', 'region', 'bloat_dir'))
+        key = tuple(values[k] for k in ('device', 'kind', 'region', 'bloat_dir', 'skip_odm'))
         data = self.bloat_data
         return bool(self.selection_valid and key == self.bloat_probe_key and data is not None
                     and 'error' not in data and (data.get('ready') or data.get('total') == 0))
@@ -1108,7 +1115,7 @@ class App(QMainWindow):
         if self.busy or self.bloat_deleting or 'bloat_dir' not in self.fields or not hasattr(self, 'region'):
             return
         values = self.values()
-        key = tuple(values[k] for k in ('device', 'kind', 'region', 'bloat_dir'))
+        key = tuple(values[k] for k in ('device', 'kind', 'region', 'bloat_dir', 'skip_odm'))
         if not self.selection_valid:
             self.bloat_scan_token += 1
             self.bloat_check_timer.stop()
@@ -1148,7 +1155,7 @@ class App(QMainWindow):
                 device = self.catalog.devices[values['device']]
                 data = inspect_downloads(manifest, Path(values['bloat_dir']).expanduser().resolve(),
                     device, values['kind'], values['region'], self.bloat_verified,
-                    cancelled=lambda: token != self.bloat_scan_token)
+                    cancelled=lambda: token != self.bloat_scan_token, skip_odm=values['skip_odm'])
                 if data is not None:
                     self.events.put(('bloat-status', (token, data)))
             except Exception as e:
@@ -1161,6 +1168,7 @@ class App(QMainWindow):
 
     def apply_bloat_status(self, data):
         self.bloat_data = data
+        self.update_skip_odm_control()
         self.update_bloat_delete()
         if 'error' in data:
             self.bloat_status.setText('Could not check local files')
@@ -1191,6 +1199,16 @@ class App(QMainWindow):
         self.bloat_download.setIcon(icon('check' if data['ready'] else 'download'))
         self.bloat_download.setEnabled(bool(data['total']) and not data['ready'] and not self.busy)
         self.update_build_gate()
+
+    def update_skip_odm_control(self):
+        # Only meaningful when this selection actually downloads a bloat odm.img.
+        has_odm = bool(self.bloat_data and self.bloat_data.get('has_odm'))
+        usable = has_odm and not self.busy and not self.bloat_deleting
+        if not has_odm and self.skip_odm.isChecked():
+            self.skip_odm.blockSignals(True); self.skip_odm.setChecked(False); self.skip_odm.blockSignals(False)
+        self.skip_odm.setEnabled(usable)
+        self.skip_odm.setToolTip("Do not download or use the bloat odm.img. The OTA's own odm.img is used instead. Off by default." if has_odm
+                                 else 'This selection has no bloat odm.img to skip.')
 
     def update_bloat_delete(self):
         enabled = False
