@@ -98,7 +98,7 @@ def bloat_folder(device, kind, region):
     return region + '_BLOAT'
 
 
-def selected_paths(manifest, device, kind, region, static_odm=False):
+def selected_paths(manifest, device, kind, region, static_odm=False, skip_odm=False):
     if not re.fullmatch(r'[A-Za-z0-9]+', device):
         raise AssetError('Invalid device ID')
     if not re.fullmatch(r'[A-Z]{2,3}', region):
@@ -115,7 +115,13 @@ def selected_paths(manifest, device, kind, region, static_odm=False):
     if device == 'GT7Pro' and kind == 'Super Flasher' and region == 'EU':
         extra |= {prefix + 'FIXES/' + name + '.img' for name in ('my_region', 'oplusstanvbk')}
     return [path for path in sorted(manifest['files']) if (path.startswith(prefix + main + '/') or path in extra)
-            and (static_odm or not (device == 'Ace6T' and kind == 'Super Flasher' and region in ('IN', 'GLO') and path.endswith('/odm.img')))]
+            and (static_odm or not (device == 'Ace6T' and kind == 'Super Flasher' and region in ('IN', 'GLO') and path.endswith('/odm.img')))
+            and not (skip_odm and path.endswith('/odm.img'))]
+
+
+def has_bloat_odm(manifest, device, kind, region):
+    """True when this selection normally downloads an odm.img from the bloat release."""
+    return any(path.endswith('/odm.img') for path in selected_paths(manifest, device, kind, region))
 
 
 def download_asset(repository, asset, cache, tag='bloat-assets-v1'):
@@ -160,8 +166,8 @@ def download_asset(repository, asset, cache, tag='bloat-assets-v1'):
         chunk_path.unlink(missing_ok=True)
 
 
-def materialize(root, cache, manifest, device, kind, region, destination=None, source=None, local_only=False, static_odm=False):
-    paths = selected_paths(manifest, device, kind, region, static_odm)
+def materialize(root, cache, manifest, device, kind, region, destination=None, source=None, local_only=False, static_odm=False, skip_odm=False):
+    paths = selected_paths(manifest, device, kind, region, static_odm, skip_odm)
     print(f'Bloat release: {manifest["repository"]} / {manifest["tag"]} • {len(paths)} selected image path(s)', flush=True)
     objects = {}
     for relative in paths:
@@ -209,13 +215,13 @@ def materialize(root, cache, manifest, device, kind, region, destination=None, s
 
 
 
-def inspect_downloads(manifest, destination, device, kind, region, verified=None, cancelled=None):
+def inspect_downloads(manifest, destination, device, kind, region, verified=None, cancelled=None, skip_odm=False):
     """Inspect the chosen image folder without downloading or blocking the GUI.
 
     Successful hashes may be reused while size/mtime/ctime/inode are unchanged.
     Build staging still verifies the actual image checksum independently.
     """
-    paths = selected_paths(manifest, device, kind, region)
+    paths = selected_paths(manifest, device, kind, region, skip_odm=skip_odm)
     verified = verified if verified is not None else {}
     count = 0
     total_bytes = 0
@@ -253,7 +259,8 @@ def inspect_downloads(manifest, destination, device, kind, region, verified=None
             verified[key] = fingerprint
         count += 1
     return dict(total=len(paths), downloaded=count, bytes=total_bytes,
-                ready=bool(paths) and count == len(paths))
+                ready=bool(paths) and count == len(paths),
+                has_odm=has_bloat_odm(manifest, device, kind, region))
 
 
 def main():
@@ -266,6 +273,7 @@ def main():
     parser.add_argument('--check-only', action='store_true')
     parser.add_argument('--local-only', action='store_true')
     parser.add_argument('--static-odm', action='store_true', help='Retain the legacy GitHub Actions ODM asset.')
+    parser.add_argument('--skip-odm', action='store_true', help='Do not download or require odm.img from the bloat release.')
     parser.add_argument('--cancel', type=Path)
     parser.add_argument('--device', required=True)
     parser.add_argument('--kind', required=True, choices=['Super Flasher', 'SuperHybrid Flasher', 'Regional Flasher', 'RegionalHybrid Flasher'])
@@ -278,14 +286,14 @@ def main():
         if args.check_only:
             folder = (args.source or args.destination or (root / 'bloat')).resolve()
             status = inspect_downloads(manifest, folder, args.device, args.kind, args.region,
-                                       cancelled=lambda: check_cancel() or False)
+                                       cancelled=lambda: check_cancel() or False, skip_odm=args.skip_odm)
             if status['total'] and not status['ready']:
                 raise AssetError(f'Local bloat files required: {status["downloaded"]}/{status["total"]} verified. Complete step 2 before building.')
             print(f'Local bloat files verified: {status["total"]}', flush=True)
             return 0
         materialize(root, args.cache.resolve(), manifest, args.device, args.kind, args.region,
                     args.destination.resolve() if args.destination else None,
-                    args.source.resolve() if args.source else None, local_only=args.local_only, static_odm=args.static_odm)
+                    args.source.resolve() if args.source else None, local_only=args.local_only, static_odm=args.static_odm, skip_odm=args.skip_odm)
         return 0
     except (AssetError, OSError, ValueError, KeyError, gzip.BadGzipFile) as e:
         print('ERROR: ' + str(e), file=sys.stderr, flush=True)
