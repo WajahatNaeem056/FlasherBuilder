@@ -313,12 +313,21 @@ def package(worker, result, dest):
     dest.with_suffix('.zip.sha256').write_text(f'{digest.hexdigest()}  {dest.name}\n', encoding='utf-8')
 
 
+def effective_skip_odm(args, repo, dev):
+    """--skip-odm only applies where the selection really downloads a bloat odm.img."""
+    if not getattr(args, 'skip_odm', False) or not (Path(repo) / 'bloat/assets-manifest.json').is_file():
+        return False
+    from scripts.materialize_bloat import load_manifest, has_bloat_odm
+    return has_bloat_odm(load_manifest(Path(repo) / 'bloat/assets-manifest.json'), dev, args.kind, args.region)
+
+
 def require_local_bloat(args, repo, dev):
     if (repo / 'bloat/assets-manifest.json').is_file():
         source = Path(getattr(args, 'bloat_dir', '') or os.environ.get('BLOAT_SOURCE_DIR', str(repo / 'bloat'))).expanduser().resolve()
         Worker(args.cancel).run(helper_command(ROOT, 'materialize',
             '--root', repo, '--source', source, '--cache', source / '.cache', '--check-only',
             '--device', dev, '--kind', args.kind, '--region', args.region,
+            *(['--skip-odm'] if effective_skip_odm(args, repo, dev) else []),
             *(['--cancel', args.cancel] if args.cancel else [])))
 
 
@@ -512,10 +521,13 @@ def build(args):
         else:
             from native_pipeline import stage, build_images
         source = Path(getattr(args, 'bloat_dir', '') or os.environ.get('BLOAT_SOURCE_DIR', str(repo / 'bloat'))).expanduser().resolve()
-        result = stage(worker, assets, job / 'stage', dev, args.kind, args.region, source)
+        skip_odm = effective_skip_odm(args, repo, dev)
+        if skip_odm: print('Bloat odm.img skipped by option; the OTA\'s own odm.img will be used.', flush=True)
+        extra = {'skip_odm': True} if skip_odm else {}  # default calls keep the original signature
+        result = stage(worker, assets, job / 'stage', dev, args.kind, args.region, source, **extra)
         print('STEP 3/5 • Extract partitions and build flasher', flush=True)
         result = build_images(worker, assets, result, download, dev, args.kind, args.region,
-                              catalog.super_size(dev, args.region), builder, odm)
+                              catalog.super_size(dev, args.region), builder, odm, **extra)
         if not result.is_dir():
             raise BuildError(f'Builder did not create the expected output: {result}')
         boot_dir = result / image_folder(dev, args.region)
@@ -539,6 +551,7 @@ def build(args):
                         version=version, artifact=filename, created=time.strftime('%Y-%m-%dT%H:%M:%S'),
                         test_fixture=bool(getattr(args, 'fixture', False)), output_format='folder' if no_zip else 'zip')
         if odm_receipt is not None: manifest['odm_source'] = odm_receipt
+        if skip_odm: manifest['skip_bloat_odm'] = True
         (job / 'build.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
         print('Removing temporary working files…', flush=True)
         for directory in (assets, job / 'stage', download):
@@ -565,6 +578,7 @@ def download_bloat(args):
         Worker(args.cancel).run(helper_command(ROOT, 'materialize',
             '--root', repo, '--destination', destination, '--cache', cache,
             '--device', dev, '--kind', args.kind, '--region', args.region,
+            *(['--skip-odm'] if effective_skip_odm(args, repo, dev) else []),
             *(['--cancel', args.cancel] if args.cancel else [])))
     except Cancelled:
         raise Cancelled('Bloat download cancelled. Completed images have been kept in the chosen folder.')
@@ -584,6 +598,7 @@ def main():
     parser.add_argument('--ota-catalog-id', default='')
     parser.add_argument('--base-catalog-id', default='')
     parser.add_argument('--bloat-dir', default='')
+    parser.add_argument('--skip-odm', action='store_true', help='Do not download or require odm.img from the bloat release; use the OTA\'s own.')
     parser.add_argument('--device', default='Oneplus 13')
     parser.add_argument('--kind', default='SuperHybrid Flasher')
     parser.add_argument('--region', default='GLO')
