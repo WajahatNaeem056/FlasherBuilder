@@ -16,7 +16,7 @@ import uuid
 from urllib.parse import urlsplit
 
 from PySide6.QtCore import QByteArray, QEvent, QPoint, QPointF, QRectF, QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontDatabase, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QTextBlockFormat, QTextCharFormat, QTextCursor, QTextOption
+from PySide6.QtGui import QDesktopServices, QGuiApplication, QFont, QFontDatabase, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QTextBlockFormat, QTextCharFormat, QTextCursor, QTextOption
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QComboBox, QFileDialog, QFrame,
     QAbstractItemView, QCheckBox, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListView, QMainWindow, QMessageBox, QPlainTextEdit,
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QComboBox, QFileDialo
 
 from .backend import ROOT, BuildError, Catalog, clean_source
 from .runtime import Runtime
+from .theme import QColor, build_style, is_dark, set_dark, system_prefers_dark, themed
 from . import ota_catalog
 from . import __version__, updates
 from .bloat_storage import BloatStorageError, plan_deletion, delete_bloat
@@ -54,6 +55,7 @@ ICONS = {
 
 
 def icon(name, color='#617188', size=20, angle=0):
+    color = themed(color)
     svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>'
     pixmap = QPixmap(size * 2, size * 2)
     pixmap.fill(Qt.GlobalColor.transparent)
@@ -327,7 +329,7 @@ class CheckBox(QCheckBox):
         painter.setBrush(QColor('#3268d9' if active and checked else '#dce5f3' if checked else '#ffffff' if active else '#f2f4f8'))
         box = QRectF(1, (self.height()-16)/2, 16, 16); painter.drawRoundedRect(box, 4, 4)
         if checked:
-            painter.setPen(QPen(QColor('#ffffff'), 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            painter.setPen(QPen(QColor('white'), 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
             x, y = box.x()+4, box.center().y()
             painter.drawLine(QPointF(x,y),QPointF(x+3,y+3));painter.drawLine(QPointF(x+3,y+3),QPointF(x+9,y-4))
         painter.setPen(QColor('#40536e' if active else '#a5afbf'));painter.setFont(self.font())
@@ -340,7 +342,9 @@ def button(text, symbol=None, name='', callback=None):
     widget.setObjectName(name)
     widget.setCursor(Qt.CursorShape.PointingHandCursor)
     if symbol:
-        widget.setIcon(icon(symbol, '#ffffff' if name == 'primary' else '#b35454' if name == 'danger' else '#617188'))
+        spec = (symbol, 'white' if name == 'primary' else '#b35454' if name == 'danger' else '#617188')
+        widget._icon_spec = spec
+        widget.setIcon(icon(*spec))
         widget.setIconSize(QSize(18, 18))
     if callback:
         widget.clicked.connect(callback)
@@ -452,6 +456,10 @@ class App(QMainWindow):
             self.saved = json.loads(self.settings.read_text(encoding='utf-8'))
         except (OSError, ValueError):
             pass
+        self.theme_mode = self.saved.get('theme') if self.saved.get('theme') in ('system', 'light', 'dark') else 'system'
+        self.theme_applying = False
+        self.theme_dark = False
+        self.bloat_status_hex = '#7d8b9e'
         self.inputs = []
         self.fields = {}
         self.ota_mode = 'file'
@@ -480,6 +488,51 @@ class App(QMainWindow):
         self.bloat_watch_timer = QTimer(self)
         self.bloat_watch_timer.timeout.connect(self.refresh_bloat_status)
         self.bloat_watch_timer.start(3000)
+        QGuiApplication.styleHints().colorSchemeChanged.connect(lambda *_: self.theme_mode == 'system' and self.apply_theme())
+        self.apply_theme()
+
+    def set_bloat_status_color(self, color):
+        self.bloat_status_hex = color
+        self.bloat_status.setStyleSheet('color: ' + themed(color) + ';')
+
+    def apply_theme(self, mode=None):
+        """mode: 'system' (follow the OS, default), 'light' or 'dark'."""
+        if self.theme_applying: return
+        self.theme_applying = True
+        try:
+            if mode: self.theme_mode = mode
+            hints = QGuiApplication.styleHints()
+            if self.theme_mode == 'system':
+                hints.setColorScheme(Qt.ColorScheme.Unknown)
+                dark = system_prefers_dark(hints)
+            else:
+                dark = self.theme_mode == 'dark'
+                hints.setColorScheme(Qt.ColorScheme.Dark if dark else Qt.ColorScheme.Light)
+            changed = dark != self.theme_dark
+            self.theme_dark = dark
+            set_dark(dark)
+            QApplication.instance().setStyleSheet(build_style(STYLE, dark))
+            for widget in self.findChildren(QPushButton):
+                spec = getattr(widget, '_icon_spec', None)
+                if spec: widget.setIcon(icon(*spec))
+                if isinstance(widget, RecheckButton) and not widget.animation.isActive(): widget.setIcon(icon('refresh'))
+            self.set_bloat_status_color(self.bloat_status_hex)
+            if changed and getattr(self, 'documentation_path', None): self.load_documentation(self.documentation_path)
+            for widget in self.findChildren(QWidget): widget.update()
+        finally:
+            self.theme_applying = False
+
+    def theme_selected(self):
+        self.apply_theme(self.theme_combo.currentData())
+        try:
+            saved = json.loads(self.settings.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            saved = {}
+        saved['theme'] = self.theme_mode
+        try:
+            self.settings.write_text(json.dumps(saved, indent=2) + '\n', encoding='utf-8')
+        except OSError as e:
+            self.log.appendPlainText('Could not save preferences: ' + str(e))
 
     def build_layout(self):
         shell = QWidget()
@@ -764,6 +817,13 @@ class App(QMainWindow):
         for row, (title, value) in enumerate((('APP VERSION', __version__), ('BUILD BACKEND', 'Native Windows' if sys.platform == 'win32' else 'Native Linux'), ('ARCHITECTURE', platform.machine()), ('BUILD TOOLS', 'otaripper  /  lpmake  /  avbtool  /  aria2c'), ('WORKFLOW CATALOG', f'{len(self.catalog.builders)} supported device, flasher and region combinations'))):
             details.addWidget(label(title, 'fieldLabel'), row, 0)
             details.addWidget(label(value, 'summaryValue', True), row, 1)
+        self.theme_combo = ComboBox(); self.theme_combo.setAccessibleName('Appearance'); self.theme_combo.setMaximumWidth(240)
+        for text, key in (('System (follow Windows)' if sys.platform == 'win32' else 'System', 'system'), ('Light', 'light'), ('Dark', 'dark')):
+            self.theme_combo.addItem(text, key)
+        self.theme_combo.setCurrentIndex(max(0, self.theme_combo.findData(self.theme_mode)))
+        self.theme_combo.currentIndexChanged.connect(lambda *_: self.theme_selected())
+        details.addWidget(label('APPEARANCE', 'fieldLabel'), row + 1, 0)
+        details.addWidget(self.theme_combo, row + 1, 1, Qt.AlignmentFlag.AlignLeft)
         layout.addLayout(details)
         self.fields['distro'] = QLineEdit(); self.fields['distro'].hide()  # Old settings compatibility.
         line = QFrame(); line.setObjectName('line'); layout.addWidget(line)
@@ -877,7 +937,7 @@ class App(QMainWindow):
             cursor = self.documentation_view.textCursor(); cursor.movePosition(QTextCursor.MoveOperation.Start)
             self.documentation_view.setTextCursor(cursor); found = self.documentation_view.find(text)
         self.documentation_search.setToolTip('Press Enter for the next match.' if found or not text else 'No matching text in this document.')
-        self.documentation_search.setStyleSheet('' if found or not text else 'border-color: #c68181;')
+        self.documentation_search.setStyleSheet('' if found or not text else 'border-color: ' + themed('#c68181') + ';')
 
     def open_documentation_link(self, url):
         if url.scheme() in ('http', 'https'):
@@ -1135,7 +1195,7 @@ class App(QMainWindow):
         if changed:
             self.bloat_data = None
             self.bloat_status.setText('Checking local files…')
-            self.bloat_status.setStyleSheet('color: #7d8b9e;')
+            self.set_bloat_status_color('#7d8b9e')
             self.bloat_download.setText('Download bloat')
             self.bloat_download.setEnabled(False)
             self.bloat_recheck.set_scanning(True); self.bloat_delete.setEnabled(False)
@@ -1172,7 +1232,7 @@ class App(QMainWindow):
         if 'error' in data:
             self.bloat_status.setText('Could not check local files')
             self.bloat_status.setToolTip(data['error'])
-            self.bloat_status.setStyleSheet('color: #b35454;')
+            self.set_bloat_status_color('#b35454')
             self.bloat_info.setText(data['error'])
             self.bloat_download.setEnabled(False)
             self.update_build_gate()
@@ -1194,7 +1254,7 @@ class App(QMainWindow):
         else:
             self.bloat_status.setText('Not downloaded')
             self.bloat_download.setText('Download bloat')
-        self.bloat_status.setStyleSheet('color: #347856;' if data['ready'] else 'color: #7d8b9e;')
+        self.set_bloat_status_color('#347856' if data['ready'] else '#7d8b9e')
         self.bloat_download.setIcon(icon('check' if data['ready'] else 'download'))
         self.bloat_download.setEnabled(bool(data['total']) and not data['ready'] and not self.busy)
         self.update_build_gate()
@@ -1266,8 +1326,8 @@ class App(QMainWindow):
 
     def save_preferences(self, values):
         try:
-            self.settings.write_text(json.dumps({k: values[k] for k in
-                ('device', 'kind', 'region', 'output', 'distro', 'bloat_dir', 'zip_output')}, indent=2) + '\n', encoding='utf-8')
+            self.settings.write_text(json.dumps({**{k: values[k] for k in
+                ('device', 'kind', 'region', 'output', 'distro', 'bloat_dir', 'zip_output')}, 'theme': self.theme_mode}, indent=2) + '\n', encoding='utf-8')
         except OSError as e:
             self.log.appendPlainText('Could not save preferences: ' + str(e))
 
