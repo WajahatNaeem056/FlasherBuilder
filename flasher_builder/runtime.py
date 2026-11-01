@@ -21,12 +21,15 @@ class Runtime:
         if action == 'bloat':
             return cmd + ['--download-bloat', '--bloat-dir', self.path(values['bloat_dir']),
                           '--cancel', self.path(cancel), '--device', values['device'],
-                          '--kind', values['kind'], '--region', values['region']]
+                          '--kind', values['kind'], '--region', values['region']] + \
+                   (['--skip-odm'] if values.get('skip_odm') else [])
         cmd += ['--output', self.path(values['output']), '--cancel', self.path(cancel)]
         if action == 'test':
             return cmd + ['--self-test']
         if values.get('bloat_dir'):
             cmd += ['--bloat-dir', self.path(values['bloat_dir'])]
+        if values.get('skip_odm') and action == 'build':
+            cmd += ['--skip-odm']
         for key in ('device', 'kind', 'region'):
             cmd += ['--' + key, values[key]]
         if action == 'ota':
