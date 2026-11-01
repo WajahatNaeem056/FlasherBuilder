@@ -30,7 +30,7 @@ def copy_tree(worker, source, destination):
     shutil.copytree(source, destination, copy_function=copy, dirs_exist_ok=True)
 
 
-def stage(worker, assets, destination, dev, kind, region, source):
+def stage(worker, assets, destination, dev, kind, region, source, skip_odm=False):
     name = kind + (' CN' if region == 'CN' else '')
     result = destination / name
     template = assets / 'flasher_scripts' / dev / template_subtree(dev, region) / ('super' if 'Super' in kind else 'regional')
@@ -46,13 +46,14 @@ def stage(worker, assets, destination, dev, kind, region, source):
     if manifest_path.is_file():
         worker.run(helper_command(ROOT, 'materialize', '--root', assets, '--cache', source / '.cache',
             '--source', source, '--local-only', '--device', dev, '--kind', kind, '--region', region,
+            *(['--skip-odm'] if skip_odm else []),
             *(['--cancel', worker.cancel] if worker.cancel else [])))
         manifest = load_manifest(manifest_path)
     else:
         # Synthetic self-test fixtures (and legacy local image checkouts).
         manifest = {'files': {p.relative_to(assets).as_posix(): '' for p in (assets / 'bloat' / dev).rglob('*.img')}}
     main = bloat_folder(dev, kind, region)
-    for relative in selected_paths(manifest, dev, kind, region):
+    for relative in selected_paths(manifest, dev, kind, region, skip_odm=skip_odm):
         path = PurePosixPath(relative)
         if len(path.parts) != 4:
             continue  # Legacy nested archival copies are not staging inputs.
@@ -122,7 +123,7 @@ def extract(worker, assets, ota, directory, partitions=None, strict=False):
     return image_folders.pop()
 
 
-def build_images(worker, assets, result, download, dev, kind, region, size, builder, odm=None):
+def build_images(worker, assets, result, download, dev, kind, region, size, builder, odm=None, skip_odm=False):
     boot_dir = result / image_folder(dev, region)
     boot_dir.mkdir(parents=True, exist_ok=True)
     super_dir = result / 'Super'
@@ -152,7 +153,9 @@ def build_images(worker, assets, result, download, dev, kind, region, size, buil
         if not (images / 'boot.img').is_file(): raise BuildError('Full OTA boot.img missing.')
         if 'Super' in kind:
             super_dir.mkdir(parents=True, exist_ok=True)
-            if dev in ('Ace5', 'Ace6T') and region != 'CN':
+            # The bloat odm.img normally replaces the OTA's. With skip_odm it is not
+            # staged, so the OTA's own odm.img is kept and goes into super instead.
+            if dev in ('Ace5', 'Ace6T') and region != 'CN' and not skip_odm:
                 (images / 'odm.img').unlink(missing_ok=True)
             for name in (SUPER_PARTS if dev == 'X9U' else EXTRACT_TO_SUPER):
                 image = images / (name + '.img')
