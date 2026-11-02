@@ -30,7 +30,7 @@ from . import ota_catalog
 from . import __version__, updates
 from .bloat_storage import BloatStorageError, plan_deletion, delete_bloat
 from .device_layout import coloros
-from scripts.materialize_bloat import AssetError, load_manifest, inspect_downloads
+from scripts.materialize_bloat import AssetError, load_manifest, inspect_downloads, skippable_odm
 
 
 ICONS = {
@@ -460,6 +460,7 @@ class App(QMainWindow):
         self.theme_applying = False
         self.theme_dark = False
         self.bloat_status_hex = '#7d8b9e'
+        self.bloat_manifest = None
         self.inputs = []
         self.fields = {}
         self.ota_mode = 'file'
@@ -752,9 +753,9 @@ class App(QMainWindow):
         self.skip_odm = CheckBox('Skip odm.img'); self.skip_odm.setObjectName('zipOption')
         self.skip_odm.setChecked(False); self.skip_odm.setAccessibleName('Skip odm.img from bloat')
         self.skip_odm.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.skip_odm.setToolTip('Do not download or use the bloat odm.img; the OTA\'s own odm.img is used instead. Works for every device, region and flasher type (no effect where there is no bloat odm.img). Off by default.')
+        self.skip_odm.setToolTip('Do not download or use the bloat odm.img; the OTA\'s own odm.img is used instead. Off by default.')
         self.skip_odm.toggled.connect(self.refresh_bloat_status)
-        self.inputs.append(self.skip_odm)
+        self.inputs.append(self.skip_odm); self.skip_odm.hide()
         bloat_metadata.addWidget(self.bloat_status, 1); bloat_metadata.addWidget(self.skip_odm); bloat_metadata.addWidget(self.bloat_info, 1)
         nl.addLayout(bloat_metadata)
         folder_row = QHBoxLayout(); folder_row.setSpacing(6)
@@ -1093,11 +1094,27 @@ class App(QMainWindow):
         except BuildError as e:
             text = str(e); self.selection_valid = False
         self.selection_info.setText(text)
+        self.update_skip_odm_option(values)
         self.refresh_bloat_status()
         self.update_build_gate()
         self.os_badge.setText('COLOR OS' if coloros(self.catalog.devices[values['device']], self.region) else 'OXYGEN OS')
         if not self.output_available:
             self.update_package_summary(values)
+
+    def update_skip_odm_option(self, values):
+        """Show 'Skip odm.img' only where this flasher takes its odm.img from bloat and
+        the OTA's own odm.img can replace it. It is hidden (and off) everywhere else."""
+        applicable = False
+        try:
+            if self.bloat_manifest is None:
+                self.bloat_manifest = load_manifest(ROOT / 'bloat/assets-manifest.json')
+            applicable = (not ota_catalog.needs_matched_odm(values['device'], values['kind'], self.region)
+                          and skippable_odm(self.bloat_manifest, self.catalog.devices[values['device']], values['kind'], self.region))
+        except (OSError, ValueError, KeyError, AssetError):
+            applicable = False
+        if not applicable and self.skip_odm.isChecked():
+            self.skip_odm.blockSignals(True); self.skip_odm.setChecked(False); self.skip_odm.blockSignals(False)
+        self.skip_odm.setVisible(applicable)
 
     def update_package_summary(self, values):
         self.summary_device.setText(values['device'].replace('Oneplus', 'OnePlus'))
