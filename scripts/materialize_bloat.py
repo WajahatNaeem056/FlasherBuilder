@@ -116,12 +116,19 @@ def selected_paths(manifest, device, kind, region, static_odm=False, skip_odm=Fa
         extra |= {prefix + 'FIXES/' + name + '.img' for name in ('my_region', 'oplusstanvbk')}
     return [path for path in sorted(manifest['files']) if (path.startswith(prefix + main + '/') or path in extra)
             and (static_odm or not (device == 'Ace6T' and kind == 'Super Flasher' and region in ('IN', 'GLO') and path.endswith('/odm.img')))
-            and not (skip_odm and path.endswith('/odm.img'))]
+            and not (skip_odm and skippable_odm_path(device, kind, region, path))]
 
 
-def has_bloat_odm(manifest, device, kind, region):
-    """True when this selection normally downloads an odm.img from the bloat release."""
-    return any(path.endswith('/odm.img') for path in selected_paths(manifest, device, kind, region))
+def skippable_odm_path(device, kind, region, path):
+    """The one bloat odm.img the user may skip: the region folder's odm.img of a Super flasher,
+    which replaces the OTA's own odm. Other bloat odm images are not optional replacements
+    (e.g. 13T's FIXES/odm.img is flashed by the flasher script itself)."""
+    return 'Super' in kind and path == f'bloat/{device}/{bloat_folder(device, kind, region)}/odm.img'
+
+
+def skippable_odm(manifest, device, kind, region):
+    """True when the 'skip odm.img' option does something for this selection."""
+    return any(skippable_odm_path(device, kind, region, p) for p in selected_paths(manifest, device, kind, region))
 
 
 def download_asset(repository, asset, cache, tag='bloat-assets-v1'):
@@ -260,7 +267,7 @@ def inspect_downloads(manifest, destination, device, kind, region, verified=None
         count += 1
     return dict(total=len(paths), downloaded=count, bytes=total_bytes,
                 ready=bool(paths) and count == len(paths),
-                has_odm=has_bloat_odm(manifest, device, kind, region))
+                has_odm=skippable_odm(manifest, device, kind, region))
 
 
 def main():
