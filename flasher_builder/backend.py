@@ -323,20 +323,16 @@ def package(worker, result, dest):
 
 
 def effective_skip_odm(args, repo, dev):
-    """--skip-odm applies to every selection. Where there is no bloat odm.img it is a no-op.
-    The one exception is a patch-matched ODM build (Ace 6T IN/GLO Super): that ODM is
-    required and is not a bloat image, so the option is ignored there."""
-    if not getattr(args, 'skip_odm', False):
+    """--skip-odm only does something where the flasher replaces the OTA's odm.img with the
+    bloat one (a Super flasher with an odm.img in its region's bloat folder). Everywhere else
+    it is ignored, so no flasher is left without an odm.img it needs."""
+    if not getattr(args, 'skip_odm', False) or ota_catalog.needs_matched_odm(args.device, args.kind, args.region):
         return False
-    return not ota_catalog.needs_matched_odm(args.device, args.kind, args.region)
-
-
-def bloat_odm_present(args, repo, dev):
     manifest = Path(repo) / 'bloat/assets-manifest.json'
     if not manifest.is_file():
         return False
-    from scripts.materialize_bloat import load_manifest, has_bloat_odm
-    return has_bloat_odm(load_manifest(manifest), dev, args.kind, args.region)
+    from scripts.materialize_bloat import load_manifest, skippable_odm
+    return skippable_odm(load_manifest(manifest), dev, args.kind, args.region)
 
 
 def require_local_bloat(args, repo, dev):
@@ -541,12 +537,11 @@ def build(args):
             from native_pipeline import stage, build_images
         source = Path(getattr(args, 'bloat_dir', '') or os.environ.get('BLOAT_SOURCE_DIR', str(repo / 'bloat'))).expanduser().resolve()
         skip_odm = effective_skip_odm(args, repo, dev)
-        skipped_bloat_odm = skip_odm and bloat_odm_present(args, repo, dev)
-        if skipped_bloat_odm:
+        skipped_bloat_odm = skip_odm
+        if skip_odm:
             print('Bloat odm.img skipped by option; the OTA\'s own odm.img will be used.', flush=True)
         elif getattr(args, 'skip_odm', False):
-            print('Skip odm.img option is on, but ' + ('this selection uses a patch-matched ODM, so it is ignored.' if not skip_odm
-                  else 'this selection has no bloat odm.img; nothing to skip.'), flush=True)
+            print('Skip odm.img option is on, but this flasher does not take its odm.img from bloat as an optional replacement; the option is ignored.', flush=True)
         extra = {'skip_odm': True} if skip_odm else {}  # default calls keep the original signature
         result = stage(worker, assets, job / 'stage', dev, args.kind, args.region, source, **extra)
         print('STEP 3/5 • Extract partitions and build flasher', flush=True)
